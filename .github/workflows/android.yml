@@ -7,80 +7,68 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Install system dependencies
         run: |
           sudo apt update
           sudo apt install -y \
-            python3 python3-pip python3-setuptools python3-wheel \
             git zip unzip wget \
             openjdk-17-jdk \
-            build-essential autoconf libtool pkg-config \
+            build-essential autoconf automake libtool m4 gettext pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libffi-dev libssl-dev \
             cmake \
-            automake libtool m4 gettext \
             libsqlite3-dev liblzma-dev
 
-      - name: Install Python build tools
+      - name: Install Python build tools (pinned)
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install --upgrade buildozer cython
+          python -m pip install --upgrade pip
+          # Cython 0.29.x suele ser el “menos problemático” con p4a en muchos builds
+          python -m pip install "cython==0.29.36" "buildozer==1.5.0"
 
       - name: Prepare Buildozer SDK + install cmdline-tools + accept licenses
         shell: bash
         run: |
           set -euxo pipefail
 
-          # Fuerza a buildozer a crear la carpeta del SDK en ~/.buildozer
           buildozer android update || true
 
           SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
-          echo "SDKROOT=$SDKROOT"
           mkdir -p "$SDKROOT/cmdline-tools"
 
-          # Instala cmdline-tools (sdkmanager) en cmdline-tools/latest
           cd /tmp
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
           rm -rf "$SDKROOT/cmdline-tools/latest"
           mkdir -p "$SDKROOT/cmdline-tools/latest"
           unzip -q cmdline.zip -d "$SDKROOT/cmdline-tools/latest"
 
-          # El zip trae una carpeta "cmdline-tools" dentro; subimos su contenido
           if [ -d "$SDKROOT/cmdline-tools/latest/cmdline-tools" ]; then
             mv "$SDKROOT/cmdline-tools/latest/cmdline-tools/"* "$SDKROOT/cmdline-tools/latest/"
             rmdir "$SDKROOT/cmdline-tools/latest/cmdline-tools"
           fi
+
           SDKMANAGER="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
-
-          echo "SDKROOT=$SDKROOT"
-          ls -la "$SDKROOT/cmdline-tools" || true
-          ls -la "$SDKROOT/cmdline-tools/latest" || true
-          ls -la "$SDKROOT/cmdline-tools/latest/bin" || true
-
-          # Fallo explícito si no existe
           test -f "$SDKMANAGER"
           chmod +x "$SDKMANAGER" || true
-          "$SDKMANAGER" --version
 
-          export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
-
-          # Aceptar licencias sin que "yes" rompa el build con pipefail
           set +o pipefail
           yes | "$SDKMANAGER" --sdk_root="$SDKROOT" --licenses
           set -o pipefail
 
-          # Instalar paquetes y quedarnos con el retorno real de sdkmanager
           "$SDKMANAGER" --sdk_root="$SDKROOT" \
-          "platform-tools" \
-          "platforms;android-33" \
-          "build-tools;34.0.0"
-         
-          # Verifica aidl
+            "platform-tools" \
+            "platforms;android-33" \
+            "build-tools;34.0.0"
+
           test -x "$SDKROOT/build-tools/34.0.0/aidl"
           "$SDKROOT/build-tools/34.0.0/aidl" --lang=java --version || true
 
