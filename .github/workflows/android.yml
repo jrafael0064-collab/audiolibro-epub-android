@@ -57,14 +57,16 @@ jobs:
 
           export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
 
-          # Acepta licencias sin interacción
+          # Aceptar licencias sin que "yes" rompa el build con pipefail
           yes | sdkmanager --sdk_root="$SDKROOT" --licenses
+          rc=${PIPESTATUS[1]}; if [ $rc -ne 0 ]; then exit $rc; fi
 
-          # Instala build-tools estables + platform-tools + platform 33
+          # Instalar paquetes y quedarnos con el retorno real de sdkmanager
           yes | sdkmanager --sdk_root="$SDKROOT" \
-            "platform-tools" \
-            "platforms;android-33" \
-            "build-tools;34.0.0"
+          "platform-tools" \
+          "platforms;android-33" \
+          "build-tools;34.0.0"
+          rc=${PIPESTATUS[1]}; if [ $rc -ne 0 ]; then exit $rc; fi
 
           # Verifica aidl
           test -x "$SDKROOT/build-tools/34.0.0/aidl"
