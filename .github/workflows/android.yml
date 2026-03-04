@@ -23,6 +23,7 @@ jobs:
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libffi-dev libssl-dev \
             cmake \
+            automake libtool m4 gettext \
             libsqlite3-dev liblzma-dev
 
       - name: Install Python build tools
@@ -81,7 +82,7 @@ jobs:
          
           # Verifica aidl
           test -x "$SDKROOT/build-tools/34.0.0/aidl"
-          "$SDKROOT/build-tools/34.0.0/aidl" --version || true
+          "$SDKROOT/build-tools/34.0.0/aidl" --lang=java --version || true
 
       - name: Build APK (Buildozer)
         shell: bash
