@@ -30,23 +30,37 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade buildozer cython
 
-      - name: Pre-download Android SDK & accept licenses
+      - name: Prepare Android SDK and accept licenses (HARD FAIL if not found)
+        shell: bash
         run: |
-          # Fuerza a buildozer a preparar el SDK/NDK/SDKmanager
+          set -euxo pipefail
+
+          # 1) Haz que buildozer prepare el árbol Android (descarga SDK/NDK)
           buildozer android update || true
 
-          SDKM="$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager"
+          SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
+          echo "SDKROOT=$SDKROOT"
+          ls -la "$SDKROOT" || true
 
-          # A veces buildozer deja cmdline-tools en otra ruta
-          if [ ! -f "$SDKM" ]; then
-            SDKM="$(find $HOME/.buildozer/android/platform/android-sdk -path '*cmdline-tools*bin/sdkmanager' | head -n 1)"
+          # 2) Encuentra sdkmanager sí o sí
+          SDKM="$(find "$SDKROOT" -type f -path '*cmdline-tools*bin/sdkmanager' | head -n 1 || true)"
+          if [ -z "$SDKM" ]; then
+            echo "ERROR: sdkmanager no encontrado dentro de $SDKROOT"
+            find "$SDKROOT" -maxdepth 4 -type d -print || true
+            exit 1
           fi
 
-          echo "Using sdkmanager at: $SDKM"
-          yes | "$SDKM" --licenses
+          echo "Using sdkmanager: $SDKM"
 
-          # Instala explícitamente build-tools estables (y platform-tools)
-          yes | "$SDKM" "platform-tools" "build-tools;34.0.0"
+          # 3) Acepta licencias (sin interacción)
+          yes | "$SDKM" --sdk_root="$SDKROOT" --licenses
+
+          # 4) Instala explícitamente platform-tools y build-tools ESTABLES (con aidl)
+          yes | "$SDKM" --sdk_root="$SDKROOT" "platform-tools" "build-tools;34.0.0"
+
+          # 5) Verifica que existe aidl
+          test -x "$SDKROOT/build-tools/34.0.0/aidl"
+          "$SDKROOT/build-tools/34.0.0/aidl" --version || true
 
       - name: Build APK (Buildozer)
         run: |
