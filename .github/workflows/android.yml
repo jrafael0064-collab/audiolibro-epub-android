@@ -54,6 +54,9 @@ jobs:
             mv "$SDKROOT/cmdline-tools/latest/cmdline-tools/"* "$SDKROOT/cmdline-tools/latest/"
             rmdir "$SDKROOT/cmdline-tools/latest/cmdline-tools"
           fi
+          ls -la "$SDKROOT/cmdline-tools/latest/bin" || true
+          which sdkmanager
+          sdkmanager --version
 
           export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
 
@@ -61,15 +64,13 @@ jobs:
           set +o pipefail
           yes | sdkmanager --sdk_root="$SDKROOT" --licenses
           set -o pipefail
-          # rc=${PIPESTATUS[1]}; if [ $rc -ne 0 ]; then exit $rc; fi
 
           # Instalar paquetes y quedarnos con el retorno real de sdkmanager
-          yes | sdkmanager --sdk_root="$SDKROOT" \
+          sdkmanager --sdk_root="$SDKROOT" \
           "platform-tools" \
           "platforms;android-33" \
           "build-tools;34.0.0"
          
-          # rc=${PIPESTATUS[1]}; if [ $rc -ne 0 ]; then exit $rc; fi
           # Verifica aidl
           test -x "$SDKROOT/build-tools/34.0.0/aidl"
           "$SDKROOT/build-tools/34.0.0/aidl" --version || true
