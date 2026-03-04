@@ -59,6 +59,11 @@ jobs:
           SDKMANAGER="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
           test -f "$SDKMANAGER"
           chmod +x "$SDKMANAGER" || true
+          
+          # ✅ Forzar Java 17 para sdkmanager
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
 
           set +o pipefail
           yes | "$SDKMANAGER" --sdk_root="$SDKROOT" --licenses
