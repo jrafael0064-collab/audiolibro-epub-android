@@ -332,12 +332,25 @@ class AndroidTTS:
             # Sin listener (evita el SIGSEGV de tu dispositivo)
             self.tts = TextToSpeech(activity, None)
 
-            # Configurar idioma y guardar el resultado real
-            try:
-                loc = Locale("es", "ES")
-                self.last_lang_status = int(self.tts.setLanguage(loc))
-            except Exception:
-                self.last_lang_status = None
+            # Idioma con fallbacks (algunos motores fallan con es-ES pero aceptan es)
+            self.last_lang_status = None
+        try:
+            candidates = [
+                Locale("es", "ES"),
+                Locale("es", ""),
+            ]
+            for loc in candidates:
+                try:
+                    st = int(self.tts.setLanguage(loc))
+                    self.last_lang_status = st
+                    # No asumimos nada: solo guardamos el último estado
+                    # y dejamos que speak() decida si funciona.
+                    if st >= 0:
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            self.last_lang_status = None
 
             # Set rate
             try:
@@ -717,15 +730,6 @@ class AudioLibroApp(App):
             self.playing = False
             return
 
-        # Si el idioma no está soportado o faltan datos, díselo claro
-        # TextToSpeech.LANG_MISSING_DATA = -1, LANG_NOT_SUPPORTED = -2
-        try:
-            if self.tts.last_lang_status in (-1, -2):
-                self.player_status = "TTS: falta voz en Español (Ajustes → Texto a voz → descargar Español)."
-                self.playing = False
-                return
-        except Exception:
-            pass
 
         self.tts.set_rate(self.rate)
 
@@ -748,7 +752,12 @@ class AudioLibroApp(App):
                 self.player_status = "Preparando TTS... (reintentando)"
                 Clock.schedule_once(lambda *_: attempt(n - 1), 0.6)
             else:
-                self.player_status = "No puedo iniciar TTS (Ajustes → Texto a voz)."
+                self.player_status = (
+                                               "TTS no responde.\n"
+                                               "1) Ajustes → Texto a voz: selecciona Google TTS\n"
+                                               "2) Descarga Español y prueba ahí\n"
+                                               "3) Reinicia la app"
+                                           )
                 self.playing = False
 
         attempt(3)
