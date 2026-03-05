@@ -317,21 +317,42 @@ class AndroidTTS:
         self.tts = None
         self.ready = False
         self.rate = 1.0
+        self.last_lang_status = None
+        self._init()
+
+    def _init(self):
+        self.ready = False
         try:
             from jnius import autoclass
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
             Locale = autoclass("java.util.Locale")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             activity = PythonActivity.mActivity
+
+            # Sin listener (evita el SIGSEGV de tu dispositivo)
             self.tts = TextToSpeech(activity, None)
+
+            # Configurar idioma y guardar el resultado real
             try:
-                self.tts.setLanguage(Locale("es", "ES"))
+                loc = Locale("es", "ES")
+                self.last_lang_status = int(self.tts.setLanguage(loc))
+            except Exception:
+                self.last_lang_status = None
+
+            # Set rate
+            try:
+                self.tts.setSpeechRate(float(self.rate))
             except Exception:
                 pass
+
+            # Ojo: aunque esté “creado”, puede tardar en estar listo.
+            # Marcamos “ready” pero hablaremos con reintentos.
             self.ready = True
+
         except Exception:
             self.tts = None
             self.ready = False
+            self.last_lang_status = None
 
     def set_rate(self, r: float):
         self.rate = max(0.5, min(2.0, float(r)))
@@ -347,8 +368,17 @@ class AndroidTTS:
         try:
             from jnius import autoclass
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-            self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, None, "utt1")
-            return True
+            Bundle = autoclass("android.os.Bundle")
+
+            params = Bundle()
+            # utteranceId obligatorio para algunas implementaciones
+            utterance_id = "utt1"
+
+            # QUEUE_FLUSH
+            res = int(self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utterance_id))
+
+            # SUCCESS = 0
+            return res == int(TextToSpeech.SUCCESS)
         except Exception:
             return False
 
@@ -359,6 +389,14 @@ class AndroidTTS:
             except Exception:
                 pass
 
+    def shutdown(self):
+        if self.tts:
+            try:
+                self.tts.shutdown()
+            except Exception:
+                pass
+        self.tts = None
+        self.ready = False
 
 # ---------------------------
 # Screens
@@ -679,6 +717,16 @@ class AudioLibroApp(App):
             self.playing = False
             return
 
+        # Si el idioma no está soportado o faltan datos, díselo claro
+        # TextToSpeech.LANG_MISSING_DATA = -1, LANG_NOT_SUPPORTED = -2
+        try:
+            if self.tts.last_lang_status in (-1, -2):
+                self.player_status = "TTS: falta voz en Español (Ajustes → Texto a voz → descargar Español)."
+                self.playing = False
+                return
+        except Exception:
+            pass
+
         self.tts.set_rate(self.rate)
 
         if not self.chunks:
@@ -687,11 +735,23 @@ class AudioLibroApp(App):
             self.player_status = "Capítulo vacío."
             return
 
-        ok = self.tts.speak(self.chunks[self.chunk_idx])
-        if not ok:
-            self.player_status = "No puedo iniciar TTS (Ajustes → Texto a voz)."
-            self.playing = False
-            return
+        # Reintento automático (por init asíncrona)
+        def attempt(n):
+            ok = self.tts.speak(self.chunks[self.chunk_idx])
+            if ok:
+                self.playing = True
+                self._save_progress()
+                self.player_status = f"▶ Cap {self.chapter_idx+1}/{len(self.chapters)} · Parte {self.chunk_idx+1}/{len(self.chunks)}"
+                return
+
+            if n > 0:
+                self.player_status = "Preparando TTS... (reintentando)"
+                Clock.schedule_once(lambda *_: attempt(n - 1), 0.6)
+            else:
+                self.player_status = "No puedo iniciar TTS (Ajustes → Texto a voz)."
+                self.playing = False
+
+        attempt(3)
 
         self.playing = True
         self._save_progress()
