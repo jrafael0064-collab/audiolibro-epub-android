@@ -38,6 +38,8 @@ from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.properties import StringProperty, ListProperty, NumericProperty, BooleanProperty
+from pathlib import Path
+from kivy.clock import Clock
 
 # plyer puede fallar en algunas ROMs; lo usamos pero con fallback
 try:
@@ -469,6 +471,12 @@ class AudioLibroApp(App):
         return self.sm
 
     # ---------- helpers ----------
+    def _on_picker_cancelled(self):
+        self.setup.status_text = "Selección cancelada."
+
+    def _set_status_error(self, msg):
+        self.setup.status_text = msg    
+    
     def _ensure_tts(self) -> bool:
         if self.tts is None:
             self.tts = AndroidTTS()
@@ -541,8 +549,7 @@ class AudioLibroApp(App):
             self.setup.status_text = "Ruta EPUB vacía."
             return
 
-        # Si Android devuelve content://, lo copiamos a un archivo local
-        if self._is_content_uri(path):
+        if path.startswith("content://"):
             local_path = self._copy_content_uri_to_local(path)
             if not local_path:
                 self.setup.status_text = "No pude importar el EPUB desde Android."
@@ -563,49 +570,49 @@ class AudioLibroApp(App):
         except Exception:
             return False
 
-    def _copy_content_uri_to_local(self, uri: str) -> str | None:
+    def _copy_content_uri_to_local(self, uri: str):
         try:
-            from jnius import autoclass, cast
+            from jnius import autoclass
 
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            Uri = autoclass("android.net.Uri")
+            OpenableColumns = autoclass("android.provider.OpenableColumns")
+            FileOutputStream = autoclass("java.io.FileOutputStream")
+            ByteArray = autoclass("java.lang.reflect.Array")
+            Byte = autoclass("java.lang.Byte")
+
             activity = PythonActivity.mActivity
             resolver = activity.getContentResolver()
+            parsed = Uri.parse(uri)
 
-            Uri = autoclass("android.net.Uri")
-            parsed_uri = Uri.parse(uri)
-
-            stream = resolver.openInputStream(parsed_uri)
+            stream = resolver.openInputStream(parsed)
             if stream is None:
+                print("openInputStream devolvió None")
                 return None
 
-            # nombre destino
-            name = "selected_book.epub"
+            filename = "libro.epub"
+
             try:
-                OpenableColumns = autoclass("android.provider.OpenableColumns")
-                cursor = resolver.query(parsed_uri, None, None, None, None)
+                cursor = resolver.query(parsed, None, None, None, None)
                 if cursor:
                     idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                     if idx >= 0 and cursor.moveToFirst():
-                        display_name = cursor.getString(idx)
-                        if display_name:
-                            name = display_name
+                        name = cursor.getString(idx)
+                        if name:
+                            filename = str(name)
                     cursor.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print("No se pudo leer DISPLAY_NAME:", e)
 
-            safe_name = name.replace("/", "_").replace("\\", "_").strip()
-            if not safe_name.lower().endswith(".epub"):
-                safe_name += ".epub"
+            if not filename.lower().endswith(".epub"):
+                filename += ".epub"
 
+            safe_name = filename.replace("/", "_").replace("\\", "_")
             dest = Path(self.user_data_dir) / safe_name
 
-            FileOutputStream = autoclass("java.io.FileOutputStream")
             fos = FileOutputStream(str(dest))
 
-            buffer_size = 8192
-            byte_array = autoclass("java.lang.reflect.Array")
-            Byte = autoclass("java.lang.Byte")
-            buf = byte_array.newInstance(Byte.TYPE, buffer_size)
+            buf = ByteArray.newInstance(Byte.TYPE, 8192)
 
             while True:
                 read = stream.read(buf)
@@ -617,49 +624,47 @@ class AudioLibroApp(App):
             fos.close()
             stream.close()
 
+            print("DEBUG local epub =", str(dest))
             return str(dest)
 
         except Exception as e:
-            self.setup.status_text = f"Error copiando EPUB: {e}"
+            print("copy_content_uri_to_local error:", e)
             return None
 
     # ---------- EPUB picker (Plyer + fallback nativo) ----------
     def pick_epub(self):
         try:
-            filechooser.open_file(
-                on_selection=self._on_file_selected,
-            )
+            from jnius import autoclass, cast
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            Intent = autoclass("android.content.Intent")
+            String = autoclass("java.lang.String")
+
+            activity = PythonActivity.mActivity
+
+            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+
+            # Primero intentamos EPUB
+            intent.setType("application/epub+zip")
+
+            # Permisos persistentes sobre el documento
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+
+            chooser = Intent.createChooser(intent, cast("java.lang.CharSequence", String("Seleccionar EPUB")))
+            activity.startActivityForResult(chooser, self.FILE_REQ_CODE)
+
+            self.setup.status_text = "Abriendo selector de EPUB..."
         except Exception as e:
-            self.setup.status_text = f"Error abriendo selector: {e}"
+            self.setup.status_text = f"Error abriendo selector nativo: {e}"
+            print("pick_epub error:", e)
 
     def _fallback_if_not_selected(self, *_):
         # Si en ~1.2s sigue vacío, es que el callback no llegó → abrir fallback
         # (si el usuario aún está en el selector, esto no molesta: el intent nativo se abre al volver)
         if not self.selected_epub_path:
             self._open_document_fallback()
-
-    def _on_file_selected(self, selection):
-        try:
-            print("DEBUG selection =", selection)
-        except Exception:
-            pass
-
-        if not selection:
-            self.setup.status_text = "Selección cancelada."
-            return
-
-        candidate = selection[0] if isinstance(selection, (list, tuple)) else selection
-
-        if candidate is None:
-            self.setup.status_text = "No se recibió ninguna ruta válida."
-            return
-
-        candidate = str(candidate).strip()
-        if not candidate:
-            self.setup.status_text = "Ruta vacía."
-            return
-
-        self._set_epub_selected(candidate)
         
     def _open_document_fallback(self):
         # Fallback nativo con Intent.ACTION_OPEN_DOCUMENT
@@ -698,29 +703,49 @@ class AudioLibroApp(App):
         try:
             from android import activity
             activity.bind(on_activity_result=self._on_activity_result)
-        except Exception:
-            pass
-
-    def _on_activity_result(self, requestCode, resultCode, intent):
-        if getattr(self, "_DOC_REQUEST_CODE", None) is None:
-            return
-        if requestCode != self._DOC_REQUEST_CODE:
-            return
-
-        # RESULT_OK = -1
-        if resultCode != -1 or intent is None:
-            self.setup.status_text = "Selección cancelada."
-            return
-
-        try:
-            uri = intent.getData()
-            if uri is None:
-                self.setup.status_text = "No llegó URI del archivo."
-                return
-            uri_str = str(uri.toString())
-            self._import_content_uri_to_local(uri_str)
         except Exception as e:
-            self.setup.status_text = f"Error leyendo resultado: {e}"
+            print("No se pudo bindear on_activity_result:", e)
+
+    def _on_activity_result(self, request_code, result_code, intent):
+        try:
+            if request_code != self.FILE_REQ_CODE:
+                return
+
+            # RESULT_OK = -1
+            if result_code != -1 or intent is None:
+                Clock.schedule_once(lambda dt: self._on_picker_cancelled(), 0)
+                return
+
+            data = intent.getData()
+            if data is None:
+                Clock.schedule_once(lambda dt: self._on_picker_cancelled(), 0)
+                return
+
+            uri = str(data.toString())
+            print("DEBUG native uri =", uri)
+
+            # Intentar persistir permiso
+            try:
+                from jnius import autoclass
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                activity = PythonActivity.mActivity
+
+                take_flags = (
+                    intent.getFlags()
+                    & (
+                        autoclass("android.content.Intent").FLAG_GRANT_READ_URI_PERMISSION
+                        | autoclass("android.content.Intent").FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                )
+                activity.getContentResolver().takePersistableUriPermission(data, take_flags)
+            except Exception as e:
+                print("No se pudo persistir permiso:", e)
+
+            Clock.schedule_once(lambda dt: self._set_epub_selected(uri), 0)
+
+        except Exception as e:
+            print("on_activity_result error:", e)
+            Clock.schedule_once(lambda dt: self._set_status_error(f"Error recibiendo EPUB: {e}"), 0)
 
     def _import_content_uri_to_local(self, uri_str: str):
         # Copia content://... a un fichero local dentro de user_data_dir
