@@ -641,6 +641,7 @@ class AudioLibroApp(App):
 
     # ---------- EPUB picker (Plyer + fallback nativo) ----------
     def pick_epub(self):
+        print("DEBUG cargar_epub entrada =", path)
         try:
             from jnius import autoclass, cast
 
