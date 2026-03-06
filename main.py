@@ -320,41 +320,33 @@ class AudioLibroApp(App):
         current_activity = PythonActivity.mActivity
         resolver = current_activity.getContentResolver()
 
-        input_stream = None
-        output_stream = None
+        pfd = None
+        src = None
 
         try:
-            input_stream = resolver.openInputStream(uri)
+            pfd = resolver.openFileDescriptor(uri, "r")
+            if pfd is None:
+                raise Exception("No se pudo abrir ParcelFileDescriptor del EPUB")
 
-            if input_stream is None:
-                raise Exception("No se pudo abrir InputStream del EPUB")
+            # Desacoplamos el fd Java y lo usamos con Python
+            fd = pfd.detachFd()
 
             base_dir = current_activity.getFilesDir().getAbsolutePath()
             dest_path = os.path.join(base_dir, "libro.epub")
 
-            FileOutputStream = autoclass("java.io.FileOutputStream")
-            output_stream = FileOutputStream(dest_path)
+            with os.fdopen(fd, "rb") as src, open(dest_path, "wb") as dst:
+                while True:
+                    chunk = src.read(64 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
 
-            # Buffer Python normal
-            while True:
-                chunk = input_stream.read()
-                if chunk == -1:
-                    break
-                output_stream.write(chunk)
-
-            output_stream.flush()
             return dest_path
 
         finally:
             try:
-                if input_stream is not None:
-                    input_stream.close()
-            except Exception:
-                pass
-
-            try:
-                if output_stream is not None:
-                    output_stream.close()
+                if pfd is not None:
+                    pfd.close()
             except Exception:
                 pass
 
