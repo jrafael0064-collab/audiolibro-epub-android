@@ -318,10 +318,17 @@ class AndroidTTS:
         self.ready = False
         self.rate = 1.0
         self.last_lang_status = None
+        self.last_engine = "desconocido"
+        self.last_speak_result = None
         self._init()
 
     def _init(self):
         self.ready = False
+        self.tts = None
+        self.last_lang_status = None
+        self.last_engine = "desconocido"
+        self.last_speak_result = None
+
         try:
             from jnius import autoclass
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
@@ -329,11 +336,15 @@ class AndroidTTS:
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             activity = PythonActivity.mActivity
 
-            # Sin listener (evita el SIGSEGV de tu dispositivo)
             self.tts = TextToSpeech(activity, None)
 
-            # Idioma con fallbacks (algunos motores fallan con es-ES pero aceptan es)
-            self.last_lang_status = None
+            try:
+                eng = self.tts.getDefaultEngine()
+                if eng:
+                    self.last_engine = str(eng)
+            except Exception:
+                pass
+
             try:
                 candidates = [
                     Locale("es", "ES"),
@@ -350,7 +361,6 @@ class AndroidTTS:
             except Exception:
                 self.last_lang_status = None
 
-            # velocidad inicial
             try:
                 self.tts.setSpeechRate(float(self.rate))
             except Exception:
@@ -362,6 +372,7 @@ class AndroidTTS:
             self.tts = None
             self.ready = False
             self.last_lang_status = None
+            self.last_engine = "desconocido"
 
     def set_rate(self, r: float):
         self.rate = max(0.5, min(2.0, float(r)))
@@ -373,6 +384,7 @@ class AndroidTTS:
 
     def speak(self, text: str) -> bool:
         if not self.tts or not self.ready:
+            self.last_speak_result = "tts_not_ready"
             return False
         try:
             from jnius import autoclass
@@ -380,15 +392,13 @@ class AndroidTTS:
             Bundle = autoclass("android.os.Bundle")
 
             params = Bundle()
-            # utteranceId obligatorio para algunas implementaciones
-            utterance_id = "utt1"
+            params.putString("utteranceId", "utt1")
 
-            # QUEUE_FLUSH
-            res = int(self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, utterance_id))
-
-            # SUCCESS = 0
+            res = int(self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "utt1"))
+            self.last_speak_result = res
             return res == int(TextToSpeech.SUCCESS)
-        except Exception:
+        except Exception as e:
+            self.last_speak_result = f"exception: {e}"
             return False
 
     def stop(self):
@@ -711,21 +721,15 @@ class AudioLibroApp(App):
     def _current_text(self):
         return self.chapters[self.chapter_idx] if self.chapters else ""
 
-    def _load_current_chunks(self):
-        self.chunks = chunk_text(self._current_text())
-        if self.chunks:
-            self.chunk_idx = max(0, min(self.chunk_idx, len(self.chunks) - 1))
-
     def _speak_current_chunk(self):
         if not self.chapters:
             self.player_status = "Sin EPUB."
             return
 
         if not self._ensure_tts():
-            self.player_status = "TTS no disponible. Instala Google TTS y Español."
+            self.player_status = "TTS no disponible."
             self.playing = False
             return
-
 
         self.tts.set_rate(self.rate)
 
@@ -735,26 +739,36 @@ class AudioLibroApp(App):
             self.player_status = "Capítulo vacío."
             return
 
-        # Reintento automático (por init asíncrona)
+        texto = self.chunks[self.chunk_idx]
+
         def attempt(n):
-            ok = self.tts.speak(self.chunks[self.chunk_idx])
+            ok = self.tts.speak(texto)
             if ok:
                 self.playing = True
                 self._save_progress()
-                self.player_status = f"▶ Cap {self.chapter_idx+1}/{len(self.chapters)} · Parte {self.chunk_idx+1}/{len(self.chunks)}"
+                self.player_status = (
+                    f"▶ Cap {self.chapter_idx+1}/{len(self.chapters)} · "
+                    f"Parte {self.chunk_idx+1}/{len(self.chunks)} · "
+                    f"Motor: {self.tts.last_engine}"
+                )
                 return
 
             if n > 0:
-                self.player_status = "Preparando TTS... (reintentando)"
-                Clock.schedule_once(lambda *_: attempt(n - 1), 0.6)
-            else:
                 self.player_status = (
-                                               "TTS no responde.\n"
-                                               "1) Ajustes → Texto a voz: selecciona Google TTS\n"
-                                               "2) Descarga Español y prueba ahí\n"
-                                               "3) Reinicia la app"
-                                           )
+                    f"Preparando TTS... reintento {4-n}/3 · "
+                    f"lang={self.tts.last_lang_status} · "
+                    f"speak={self.tts.last_speak_result} · "
+                    f"motor={self.tts.last_engine}"
+                )
+                Clock.schedule_once(lambda *_: attempt(n - 1), 1.0)
+            else:
                 self.playing = False
+                self.player_status = (
+                    f"TTS no responde · "
+                    f"lang={self.tts.last_lang_status} · "
+                    f"speak={self.tts.last_speak_result} · "
+                    f"motor={self.tts.last_engine}"
+                )
 
         attempt(3)
 
@@ -763,7 +777,24 @@ class AudioLibroApp(App):
         self.player_status = f"▶ Cap {self.chapter_idx+1}/{len(self.chapters)} · Parte {self.chunk_idx+1}/{len(self.chunks)}"
 
     def play(self):
-        self._speak_current_chunk()
+        if not self._ensure_tts():
+            self.player_status = "TTS no disponible."
+            return
+
+        self.tts.set_rate(self.rate)
+
+        # prueba corta primero
+        ok = self.tts.speak("Prueba de voz")
+        if not ok:
+            self.player_status = (
+                f"TTS no responde · "
+                f"lang={self.tts.last_lang_status} · "
+                f"speak={self.tts.last_speak_result} · "
+                f"motor={self.tts.last_engine}"
+            )
+            return
+
+        Clock.schedule_once(lambda *_: self._speak_current_chunk(), 1.2)
 
     def pause(self):
         if self.tts and self.tts.ready:
