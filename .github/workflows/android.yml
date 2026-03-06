@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -10,93 +10,17 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - name: Build APK with Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
         with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            python3 python3-pip python3-setuptools python3-wheel \
-            git zip unzip wget \
-            build-essential autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev \
-            libffi-dev libssl-dev \
-            cmake \
-            automake libtool m4 gettext \
-            libsqlite3-dev liblzma-dev
-
-      - name: Verify Java
-        run: |
-          java -version
-          javac -version
-          echo "JAVA_HOME=$JAVA_HOME"
-
-      - name: Install Python build tools (pinned)
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install "buildozer==1.5.0" "cython<3"
-
-      - name: Prepare Buildozer SDK + install cmdline-tools + accept licenses
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export PATH="$JAVA_HOME/bin:$PATH"
-          java -version
-          javac -version
-
-          mkdir -p "$HOME/.buildozer/android/platform/android-sdk"
-          SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
-          mkdir -p "$SDKROOT/cmdline-tools"
-
-          cd /tmp
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
-          rm -rf "$SDKROOT/cmdline-tools/latest"
-          mkdir -p "$SDKROOT/cmdline-tools/latest"
-          unzip -q cmdline.zip -d "$SDKROOT/cmdline-tools/latest"
-
-          if [ -d "$SDKROOT/cmdline-tools/latest/cmdline-tools" ]; then
-            mv "$SDKROOT/cmdline-tools/latest/cmdline-tools/"* "$SDKROOT/cmdline-tools/latest/"
-            rmdir "$SDKROOT/cmdline-tools/latest/cmdline-tools"
-          fi
-
-          SDKMANAGER="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
-          test -f "$SDKMANAGER"
-          chmod +x "$SDKMANAGER"
-
-          export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
-
-          java -version
-          "$SDKMANAGER" --version
-
-          yes | "$SDKMANAGER" --sdk_root="$SDKROOT" --licenses >/dev/null || true
-
-          "$SDKMANAGER" --sdk_root="$SDKROOT" \
-            "platform-tools" \
-            "platforms;android-33" \
-            "build-tools;34.0.0"
-
-      - name: Build APK (Buildozer)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export PATH="$JAVA_HOME/bin:$PATH"
-          java -version
-          javac -version
-
-          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
-
-          buildozer -v android debug
+          command: buildozer android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: bin/*.apk
+          path: ./.buildozer/android/platform/build-*/dists/**/*.apk
+          if-no-files-found: warn
