@@ -217,56 +217,36 @@ class AudioLibroApp(App):
         self.info_label.text = message
 
     # =========================
-    # SELECCIÓN DE EPUB EN ANDROID
-    # =========================
-    def pick_epub(self, *_args):
-        if self._is_android():
-            self._pick_epub_android()
-        else:
-            self.set_status("Esta versión está pensada para Android.")
-            self.text_box.text = "Prueba en Android para usar el selector de EPUB."
+    # SELECCIÓN DE EPUB EN ANDROID/ BOTONES Y ACCIONES
+    # =========================    
 
-    def _is_android(self) -> bool:
-        try:
-            from kivy.utils import platform
-            return platform == "android"
-        except Exception:
-            return False
+    def on_generate_audio_pressed(self):
+        import os
+        import threading
 
-    def _pick_epub_android(self):
-        try:
-            from jnius import autoclass, cast
-            from android import activity
+        if getattr(self, "is_generating_audio", False):
+            self.set_status("Ya se está generando audio...")
+            return
 
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            Intent = autoclass("android.content.Intent")
-            String = autoclass("java.lang.String")
+        epub_path = getattr(self, "local_epub_path", None)
+ 
+        if not epub_path:
+            self.set_status("Primero carga un EPUB.")
+            return
 
-            current_activity = PythonActivity.mActivity
+        if not os.path.exists(epub_path):
+            self.set_status("El archivo EPUB ya no existe.")
+            return
 
-            try:
-                activity.unbind(on_activity_result=self._on_activity_result)
-            except Exception:
-                pass
+        self.is_generating_audio = True
+        self.set_status("Extrayendo texto y preparando audio...")
 
-            activity.bind(on_activity_result=self._on_activity_result)
-
-            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
-            intent.addCategory(Intent.CATEGORY_OPENABLE)
-            intent.setType("application/epub+zip")
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-
-            chooser_title = cast("java.lang.CharSequence", String("Elegir EPUB"))
-            chooser = Intent.createChooser(intent, chooser_title)
-
-            current_activity.startActivityForResult(chooser, ANDROID_FILE_REQ_CODE)
-            self.set_status("Abriendo selector de EPUB...")
-
-        except Exception as e:
-            Logger.exception("Error abriendo selector Android")
-            self.set_status(f"Error al abrir selector: {e}")
-
+        threading.Thread(
+            target=self._do_generate_audio_sample,
+            args=(epub_path,),
+            daemon=True
+        ).start()
+    
     def _on_activity_result(self, request_code, result_code, intent):
         if request_code != ANDROID_FILE_REQ_CODE:
             return
@@ -322,6 +302,140 @@ class AudioLibroApp(App):
                 0
             )
 
+    def on_show_text_pressed(self):
+        import os
+        import threading
+
+        epub_path = getattr(self, "local_epub_path", None)
+
+        if not epub_path:
+            self.set_status("Primero carga un EPUB.")
+            return
+
+        if not os.path.exists(epub_path):
+            self.set_status("El archivo EPUB ya no existe.")
+            return
+
+        self.set_status("Extrayendo texto del EPUB...")
+
+        threading.Thread(
+            target=self._do_extract_text,
+            args=(epub_path,),
+            daemon=True
+        ).start()  
+    
+    # =========================
+    # WORKERS (THREADS) 
+    # =========================
+
+    def _do_generate_audio_sample(self, epub_path: str):
+        from kivy.clock import Clock
+        from kivy.logger import Logger
+
+        try:
+            text = extract_epub_text(epub_path, max_chars=12000)
+
+            if not text or not text.strip():
+                raise Exception("No se pudo extraer texto del EPUB.")
+
+            lower_text = text.lower()
+            if (
+                lower_text.startswith("no existe el archivo")
+                or lower_text.startswith("epub no válido")
+                or lower_text.startswith("no se encontró")
+                or lower_text.startswith("no se pudo extraer")
+                or lower_text.startswith("error leyendo epub")
+            ):
+                raise Exception(text)
+
+            sample_text = self._make_tts_sample_text(text, max_chars=1200)
+
+            if not sample_text.strip():
+                raise Exception("No hay texto útil para generar audio.")
+
+            audio_path = self._generate_tts_wav(sample_text)
+
+            Clock.schedule_once(
+                lambda dt, p=audio_path: self._ui_audio_generated_ok(p),
+                0
+            )
+
+        except Exception as e:
+            Logger.exception("APP: Error generando audio de prueba")
+            Clock.schedule_once(
+                lambda dt, msg=str(e): self._ui_audio_generated_error(msg),
+                0
+            )
+
+    def _do_extract_text(self, epub_path: str):
+        from kivy.clock import Clock
+
+        text = extract_epub_text(epub_path, max_chars=12000)
+
+        if not text.strip():
+            text = "No se pudo extraer texto."
+
+        Clock.schedule_once(
+            lambda dt, t=text, p=epub_path: self._ui_show_extracted_text(t, p),
+            0
+        )
+
+    
+    def pick_epub(self, *_args):
+        if self._is_android():
+            self._pick_epub_android()
+        else:
+            self.set_status("Esta versión está pensada para Android.")
+            self.text_box.text = "Prueba en Android para usar el selector de EPUB."
+
+    def _is_android(self) -> bool:
+        try:
+            from kivy.utils import platform
+            return platform == "android"
+        except Exception:
+            return False
+
+    def _pick_epub_android(self):
+        try:
+            from jnius import autoclass, cast
+            from android import activity
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            Intent = autoclass("android.content.Intent")
+            String = autoclass("java.lang.String")
+
+            current_activity = PythonActivity.mActivity
+
+            try:
+                activity.unbind(on_activity_result=self._on_activity_result)
+            except Exception:
+                pass
+
+            activity.bind(on_activity_result=self._on_activity_result)
+
+            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.setType("application/epub+zip")
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+
+            chooser_title = cast("java.lang.CharSequence", String("Elegir EPUB"))
+            chooser = Intent.createChooser(intent, chooser_title)
+
+            current_activity.startActivityForResult(chooser, ANDROID_FILE_REQ_CODE)
+            self.set_status("Abriendo selector de EPUB...")
+
+        except Exception as e:
+            Logger.exception("Error abriendo selector Android")
+            self.set_status(f"Error al abrir selector: {e}")
+
+
+    # =========================
+    # AUDIO / TTS
+    # =========================  
+
+ 
+
     def _copy_uri_to_internal_file(self, uri):
         from jnius import autoclass
         import os
@@ -360,26 +474,28 @@ class AudioLibroApp(App):
             except Exception:
                 pass
 
-    def _ui_set_status_only(self, message):
-        try:
-            self.set_status(message)
-        except Exception:
-            Logger.exception("APP: Error actualizando estado en UI")
 
-    def _ui_epub_loaded(self, local_path):
-        try:
-            self.local_epub_path = local_path
-            self.set_status(f"EPUB cargado:\n{local_path}")
-            self.text_box.text = (
-                f"EPUB cargado correctamente.\n\nRuta local:\n{local_path}\n\n"
-                "Pulsa 'Mostrar texto' para extraer una vista previa."
-            )
-        except Exception:
-            Logger.exception("APP: Error actualizando UI tras cargar EPUB")
     
     # =========================
-    # TEXTO
+    # HELPERS TEXTO
     # =========================
+
+    def _make_tts_sample_text(self, text: str, max_chars: int = 1200) -> str:
+        import re
+
+        text = text.replace("\r", "\n")
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r"[ \t]+", " ", text)
+        text = text.strip()
+
+        text = text[:max_chars]
+
+        last_dot = max(text.rfind("."), text.rfind("!"), text.rfind("?"))
+        if last_dot > 300:
+            text = text[:last_dot + 1]
+
+        return text.strip()   
+    
     def show_epub_text(self, *_args):
         epub_path = self.app_storage_epub_path()
 
@@ -421,23 +537,6 @@ class AudioLibroApp(App):
                 0
             )
 
-    def _ui_texto_extraido(self, texto):
-        try:
-            self.set_status("Texto extraído correctamente.")
-            self.text_box.text = texto
-        except Exception:
-            Logger.exception("APP: Error mostrando texto en UI")
-
-
-    def _ui_error_texto(self, error_text):
-        try:
-            self.is_extracting = False
-            self.set_status(f"Error extrayendo texto: {error_text}")
-            self.text_box.text = f"Error extrayendo texto del EPUB:\n\n{error_text}"
-        except Exception:
-            from kivy.logger import Logger
-            Logger.exception("APP: Error mostrando fallo de extracción")
-            self.is_extracting = False
 
     def mostrar_texto(self):
         from kivy.clock import Clock
@@ -462,50 +561,8 @@ class AudioLibroApp(App):
             daemon=True
         ).start()
 
-    def _do_extract_text(self, epub_path: str):
-        from kivy.clock import Clock
 
-        text = extract_epub_text(epub_path, max_chars=12000)
-
-        if not text.strip():
-            text = "No se pudo extraer texto."
-
-        Clock.schedule_once(
-            lambda dt, t=text, p=epub_path: self._ui_show_extracted_text(t, p),
-            0
-        )
-
-    def _ui_show_extracted_text(self, text, epub_path):
-        try:
-            self.is_extracting = False
-            self.text_box.text = text
-            self.set_status(f"Texto extraído desde:\n{epub_path}")
-        except Exception:
-            from kivy.logger import Logger
-            Logger.exception("APP: Error mostrando texto extraído")
-            self.is_extracting = False
-
-    def on_show_text_pressed(self):
-        import os
-        import threading
-
-        epub_path = getattr(self, "local_epub_path", None)
-
-        if not epub_path:
-            self.set_status("Primero carga un EPUB.")
-            return
-
-        if not os.path.exists(epub_path):
-            self.set_status("El archivo EPUB ya no existe.")
-            return
-
-        self.set_status("Extrayendo texto del EPUB...")
-
-        threading.Thread(
-            target=self._do_extract_text,
-            args=(epub_path,),
-            daemon=True
-        ).start()   
+ 
         
     def _leer_epub_texto(self, path):
         from ebooklib import epub
@@ -523,6 +580,79 @@ class AudioLibroApp(App):
                     partes.append(texto)
 
         return "\n\n".join(partes)
+    # =========================
+    # ACTUALIZACION UI
+    # =========================
+
+    def _ui_audio_generated_ok(self, audio_path):
+        try:
+            self.is_generating_audio = False
+            self.last_audio_path = audio_path
+            self.set_status(f"Audio generado:\n{audio_path}")
+            self.text_box.text = (
+                "Audio de prueba generado correctamente.\n\n"
+                f"Ruta:\n{audio_path}\n\n"
+                "Ya tenemos el primer tramo EPUB → texto → audio."
+            )
+        except Exception:
+            from kivy.logger import Logger
+            Logger.exception("APP: Error mostrando éxito de audio")
+            self.is_generating_audio = False   
+
+    def _ui_audio_generated_error(self, error_text):
+        try:
+            self.is_generating_audio = False
+            self.set_status(f"Error generando audio: {error_text}")
+            self.text_box.text = f"Error generando audio:\n\n{error_text}"
+        except Exception:
+            from kivy.logger import Logger
+            Logger.exception("APP: Error mostrando fallo de audio")
+            self.is_generating_audio = False
+    
+    def _ui_show_extracted_text(self, text, epub_path):
+        try:
+            self.is_extracting = False
+            self.text_box.text = text
+            self.set_status(f"Texto extraído desde:\n{epub_path}")
+        except Exception:
+            from kivy.logger import Logger
+            Logger.exception("APP: Error mostrando texto extraído")
+            self.is_extracting = False
+
+    def _ui_texto_extraido(self, texto):
+        try:
+            self.set_status("Texto extraído correctamente.")
+            self.text_box.text = texto
+        except Exception:
+            Logger.exception("APP: Error mostrando texto en UI")
+
+
+    def _ui_error_texto(self, error_text):
+        try:
+            self.is_extracting = False
+            self.set_status(f"Error extrayendo texto: {error_text}")
+            self.text_box.text = f"Error extrayendo texto del EPUB:\n\n{error_text}"
+        except Exception:
+            from kivy.logger import Logger
+            Logger.exception("APP: Error mostrando fallo de extracción")
+            self.is_extracting = False
+
+    def _ui_set_status_only(self, message):
+        try:
+            self.set_status(message)
+        except Exception:
+            Logger.exception("APP: Error actualizando estado en UI")
+
+    def _ui_epub_loaded(self, local_path):
+        try:
+            self.local_epub_path = local_path
+            self.set_status(f"EPUB cargado:\n{local_path}")
+            self.text_box.text = (
+                f"EPUB cargado correctamente.\n\nRuta local:\n{local_path}\n\n"
+                "Pulsa 'Mostrar texto' para extraer una vista previa."
+            )
+        except Exception:
+            Logger.exception("APP: Error actualizando UI tras cargar EPUB")
 
 
 
