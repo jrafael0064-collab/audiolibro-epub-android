@@ -34,6 +34,7 @@ jobs:
       - name: Verify Java
         run: |
           java -version
+          javac -version
           echo "JAVA_HOME=$JAVA_HOME"
 
       - name: Install Python build tools (pinned)
@@ -50,7 +51,6 @@ jobs:
           javac -version
 
           mkdir -p "$HOME/.buildozer/android/platform/android-sdk"
-
           SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
           mkdir -p "$SDKROOT/cmdline-tools"
 
@@ -71,7 +71,6 @@ jobs:
 
           export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
 
-          # asegura Java 17
           java -version
           "$SDKMANAGER" --version
 
@@ -83,18 +82,18 @@ jobs:
             "build-tools;34.0.0"
 
       - name: Build APK (Buildozer)
-          shell: bash
-         run: |
-           set -euxo pipefail
-           export PATH="$JAVA_HOME/bin:$PATH"
-           java -version
-           javac -version
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+          javac -version
 
-           export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
-           export ANDROID_HOME="$ANDROID_SDK_ROOT"
-           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
 
-           buildozer -v android debug
+          buildozer -v android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
