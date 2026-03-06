@@ -238,10 +238,10 @@ class AudioLibroApp(App):
 
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             Intent = autoclass("android.content.Intent")
+            String = autoclass("java.lang.String")
 
             current_activity = PythonActivity.mActivity
 
-            # Desvincular antes por si había uno antiguo
             try:
                 activity.unbind(on_activity_result=self._on_activity_result)
             except Exception:
@@ -255,9 +255,10 @@ class AudioLibroApp(App):
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
 
-            chooser = Intent.createChooser(intent, "Elegir EPUB")
-            current_activity.startActivityForResult(chooser, ANDROID_FILE_REQ_CODE)
+            chooser_title = cast("java.lang.CharSequence", String("Elegir EPUB"))
+            chooser = Intent.createChooser(intent, chooser_title)
 
+            current_activity.startActivityForResult(chooser, ANDROID_FILE_REQ_CODE)
             self.set_status("Abriendo selector de EPUB...")
 
         except Exception as e:
