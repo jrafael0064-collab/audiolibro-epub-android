@@ -26,6 +26,8 @@ ANDROID_FILE_REQ_CODE = 1001
 # =========================
 # UTILIDADES EPUB
 # =========================
+
+
 def strip_html_to_text(html_bytes: bytes) -> str:
     """Convierte HTML/XHTML a texto plano de forma sencilla y robusta."""
     try:
@@ -389,14 +391,111 @@ class AudioLibroApp(App):
         self.set_status("Extrayendo texto del EPUB...")
         Clock.schedule_once(lambda dt: self._do_extract_text(epub_path), 0.1)
 
+    def _extraer_texto_epub_worker(self, path):
+        from kivy.clock import Clock
+        from kivy.logger import Logger
+
+        try:
+            texto = self._leer_epub_texto(path)
+
+            if not texto or not texto.strip():
+                Clock.schedule_once(
+                    lambda dt: self._ui_texto_extraido("No se pudo extraer texto legible del EPUB."),
+                    0
+                )
+                return
+
+            vista_previa = texto[:5000]
+
+            Logger.info(f"APP: Texto extraído correctamente, longitud={len(texto)}")
+
+            Clock.schedule_once(
+                lambda dt, t=vista_previa: self._ui_texto_extraido(t),
+                0
+            )
+
+        except Exception as e:
+            Logger.exception("APP: Error extrayendo texto del EPUB")
+            Clock.schedule_once(
+                lambda dt, msg=str(e): self._ui_error_texto(msg),
+                0
+            )
+
+    def _ui_show_extracted_text(self, text, epub_path):
+        try:
+            self.text_box.text = text
+            self.set_status(f"Texto extraído desde:\n{epub_path}")
+        except Exception:
+            from kivy.logger import Logger
+            Logger.exception("APP: Error mostrando texto extraído")
+
+    def _ui_texto_extraido(self, texto):
+        try:
+            self.set_status("Texto extraído correctamente.")
+            self.text_box.text = texto
+        except Exception:
+            Logger.exception("APP: Error mostrando texto en UI")
+
+
+    def _ui_error_texto(self, error_text):
+        try:
+            self.set_status(f"Error extrayendo texto: {error_text}")
+            self.text_box.text = f"Error extrayendo texto del EPUB:\n\n{error_text}"
+        except Exception:
+            Logger.exception("APP: Error mostrando fallo de extracción")
+
+    def mostrar_texto(self):
+        from kivy.clock import Clock
+        import os
+        import threading
+ 
+        path = getattr(self, "local_epub_path", None)
+
+        if not path:
+            self.set_status("Primero carga un EPUB.")
+            return
+
+        if not os.path.exists(path):
+            self.set_status("El archivo EPUB no existe en la ruta interna.")
+            return
+
+        self.set_status("Extrayendo texto del EPUB...")
+
+        threading.Thread(
+            target=self._extraer_texto_epub_worker,
+            args=(path,),
+            daemon=True
+        ).start()
+
     def _do_extract_text(self, epub_path: str):
+        from kivy.clock import Clock
+
         text = extract_epub_text(epub_path, max_chars=12000)
 
         if not text.strip():
             text = "No se pudo extraer texto."
 
-        self.text_box.text = text
-        self.set_status(f"Texto extraído desde:\n{epub_path}")
+        Clock.schedule_once(
+            lambda dt, t=text, p=epub_path: self._ui_show_extracted_text(t, p),
+            0
+        )
+    def _leer_epub_texto(self, path):
+        from ebooklib import epub
+        from bs4 import BeautifulSoup
+
+        book = epub.read_epub(path)
+        partes = []
+
+        for item in book.get_items():
+            if item.get_type() == 9:  # ITEM_DOCUMENT
+                contenido = item.get_content()
+                soup = BeautifulSoup(contenido, "html.parser")
+                texto = soup.get_text(separator=" ", strip=True)
+                if texto:
+                    partes.append(texto)
+
+        return "\n\n".join(partes)
+
 
 
 if __name__ == "__main__":
